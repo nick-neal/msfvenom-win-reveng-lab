@@ -39,9 +39,7 @@ The script will perform the following actions in your VM:
 - Download and Install Python 3.10
     - Install speakeasy-emulator module
 - Create C:\demo directory and whitelist the directory in MSDefender
+- Set powershell execution policy to unrestricted
 - Download the following files from the repo:
     - listener.ps1  -> C:\demo
-        - `Unblock-File -Path "C:\demo\listen.ps1"`
     - shellcode.exe -> C:\demo
-        - `Unblock-File -Path "C:\demo\shellcode.exe"`
-    - notes.pdf     -> C:\Users\$env:USERNAME\Desktop

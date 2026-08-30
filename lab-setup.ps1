@@ -7,6 +7,7 @@
 
 .DESCRIPTION
     Installs and configures:
+      * PowerShell execution policy (LocalMachine) set to Unrestricted
       * Eclipse Temurin OpenJDK (JAVA_HOME + PATH)
       * Ghidra (latest GitHub release, GHIDRA_INSTALL_DIR + desktop shortcut)
       * WinDbg (winget, with the aka.ms App Installer package as fallback)
@@ -29,6 +30,10 @@
     Full CPython 3.10 patch version. 3.10.11 is the last 3.10 with a binary
     installer, so there is no reason to change this.
 
+.PARAMETER ExecutionPolicyLevel
+    Machine execution policy to set. Default Unrestricted. Appropriate for a
+    dedicated lab VM; not recommended on a general-purpose machine.
+
 .PARAMETER Force
     Reinstall components even if they are already detected.
 
@@ -50,10 +55,14 @@ param(
     [string]$PythonVersion = '3.10.11',
     [string]$PythonRoot    = 'C:\Python310',
 
+    [ValidateSet('Restricted', 'AllSigned', 'RemoteSigned', 'Unrestricted', 'Bypass')]
+    [string]$ExecutionPolicyLevel = 'Unrestricted',
+
     # Sample/tooling files to stage into the demo directory for analysis.
     [string]$LabRepo  = 'nick-neal/msfvenom-win-reveng-lab',
     [string[]]$LabFiles = @('listener.ps1', 'shellcode.exe'),
 
+    [switch]$SkipExecutionPolicy,
     [switch]$SkipJdk,
     [switch]$SkipGhidra,
     [switch]$SkipWinDbg,
@@ -253,6 +262,35 @@ function Invoke-Step {
 # Component installers
 # ---------------------------------------------------------------------------
 
+function Set-ScriptExecutionPolicy {
+    <#
+        Sets the machine-wide PowerShell execution policy. On a dedicated analysis
+        VM this is convenient - unsigned lab scripts (e.g. listener.ps1) then run
+        without prompting. It is NOT something to do on a general-purpose machine.
+        Note 'Unrestricted' still warns once for files that carry a Mark-of-the-Web
+        unless they have been unblocked.
+    #>
+    $scope = 'LocalMachine'
+
+    $current = Get-ExecutionPolicy -Scope $scope
+    if ($current -eq $ExecutionPolicyLevel -and -not $Force) {
+        Write-Log "Execution policy ($scope) already $ExecutionPolicyLevel"
+    }
+    else {
+        try {
+            Set-ExecutionPolicy -ExecutionPolicy $ExecutionPolicyLevel -Scope $scope -Force -ErrorAction Stop
+            Write-Log "Set execution policy ($scope) = $ExecutionPolicyLevel"
+        }
+        catch {
+            Write-Log "Could not set execution policy: $($_.Exception.Message)" 'WARN'
+            Write-Log 'A Group Policy (MachinePolicy/UserPolicy scope) may enforce a policy that overrides this and cannot be changed here.' 'WARN'
+        }
+    }
+
+    # Effective policy is the winner across scopes: GPO > Process > CurrentUser > LocalMachine.
+    Write-Log "Effective execution policy: $(Get-ExecutionPolicy)"
+}
+
 function Install-OpenJdk {
     $target = Join-Path $InstallRoot "jdk-$JdkVersion"
 
@@ -277,7 +315,19 @@ function Install-OpenJdk {
     Set-MachineEnvVar -Name 'JAVA_HOME' -Value $target
     Add-MachinePath -Directory (Join-Path $target 'bin')
 
-    $version = & (Join-Path $target 'bin\java.exe') -version 2>&1 | Select-Object -First 1
+    # `java -version` writes its banner to STDERR by design. Merging that with
+    # 2>&1 while $ErrorActionPreference is 'Stop' makes PowerShell 5.1 promote the
+    # normal output to a terminating NativeCommandError - which false-fails this
+    # step even though the JDK installed fine. Run the probe in a child scope with
+    # the preference relaxed so stderr is treated as plain text, and confirm the
+    # install by checking that java.exe actually exists.
+    $javaExe = Join-Path $target 'bin\java.exe'
+    if (-not (Test-Path $javaExe)) { throw "java.exe not found at $javaExe after install" }
+
+    $version = & {
+        $ErrorActionPreference = 'Continue'
+        (& $javaExe -version 2>&1 | Select-Object -First 1 | Out-String).Trim()
+    }
     Write-Log "java -version: $version"
 }
 
@@ -379,6 +429,7 @@ function Install-Python {
     Add-MachinePath -Directory $PythonRoot
     Add-MachinePath -Directory (Join-Path $PythonRoot 'Scripts')
 
+    # `python --version` writes to STDOUT, so the 2>&1 merge here is safe.
     Write-Log ('Interpreter: ' + (& $python --version 2>&1))
 
     Write-Log 'Upgrading pip'
@@ -389,7 +440,15 @@ function Install-Python {
     & $python -m pip install speakeasy-emulator --disable-pip-version-check --no-warn-script-location
     if ($LASTEXITCODE -ne 0) { throw "pip install speakeasy-emulator failed with code $LASTEXITCODE" }
 
-    $check = & $python -c "import speakeasy; print(getattr(speakeasy, '__version__', 'installed'))" 2>&1
+    # Import in a child scope with the error preference relaxed: dependency imports
+    # (unicorn/capstone/pefile) can emit warnings to stderr, which would otherwise
+    # become a terminating error under $ErrorActionPreference='Stop'. Verify by
+    # exit code rather than by inspecting the merged text.
+    $check = & {
+        $ErrorActionPreference = 'Continue'
+        (& $python -c "import speakeasy; print(getattr(speakeasy, '__version__', 'installed'))" 2>&1 | Out-String).Trim()
+    }
+    if ($LASTEXITCODE -ne 0) { throw "speakeasy import failed (exit $LASTEXITCODE): $check" }
     Write-Log "speakeasy import check: $check"
 }
 
@@ -473,12 +532,13 @@ Write-Log "Host: $env:COMPUTERNAME   User: $env:USERNAME   PS: $($PSVersionTable
 Write-Log "InstallRoot: $InstallRoot   DemoPath: $DemoPath   Scratch: $WorkDir"
 
 try {
-    Invoke-Step -Name 'OpenJDK'          -Skip:$SkipJdk    -Action { Install-OpenJdk }
-    Invoke-Step -Name 'Ghidra'           -Skip:$SkipGhidra -Action { Install-Ghidra }
-    Invoke-Step -Name 'WinDbg'           -Skip:$SkipWinDbg -Action { Install-WinDbg }
+    Invoke-Step -Name 'Execution policy'   -Skip:$SkipExecutionPolicy -Action { Set-ScriptExecutionPolicy }
+    Invoke-Step -Name 'OpenJDK'            -Skip:$SkipJdk    -Action { Install-OpenJdk }
+    Invoke-Step -Name 'Ghidra'             -Skip:$SkipGhidra -Action { Install-Ghidra }
+    Invoke-Step -Name 'WinDbg'             -Skip:$SkipWinDbg -Action { Install-WinDbg }
     Invoke-Step -Name 'Python + Speakeasy' -Skip:$SkipPython -Action { Install-Python }
-    Invoke-Step -Name 'Demo directory'   -Action { Set-DemoDirectory }
-    Invoke-Step -Name 'Lab files'        -Skip:$SkipLabFiles -Action { Get-LabFiles }
+    Invoke-Step -Name 'Demo directory'     -Action { Set-DemoDirectory }
+    Invoke-Step -Name 'Lab files'          -Skip:$SkipLabFiles -Action { Get-LabFiles }
 }
 finally {
     if (Test-Path $WorkDir) {
