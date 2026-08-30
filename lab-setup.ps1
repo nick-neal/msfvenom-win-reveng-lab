@@ -50,11 +50,16 @@ param(
     [string]$PythonVersion = '3.10.11',
     [string]$PythonRoot    = 'C:\Python310',
 
+    # Sample/tooling files to stage into the demo directory for analysis.
+    [string]$LabRepo  = 'nick-neal/msfvenom-win-reveng-lab',
+    [string[]]$LabFiles = @('listener.ps1', 'shellcode.exe'),
+
     [switch]$SkipJdk,
     [switch]$SkipGhidra,
     [switch]$SkipWinDbg,
     [switch]$SkipPython,
     [switch]$SkipDefenderExclusion,
+    [switch]$SkipLabFiles,
     [switch]$Force
 )
 
@@ -124,6 +129,38 @@ function Get-RemoteFile {
             Start-Sleep -Seconds (5 * $i)
         }
     }
+}
+
+function Get-GitHubRepoFile {
+    <#
+        Resolves a file inside a public GitHub repo by its leaf name (so it works
+        whether the file sits at the repo root or in a subdirectory), downloads
+        the raw blob, and returns the local path. Uses the repo's default branch.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Repo,        # 'owner/name'
+        [Parameter(Mandatory)][string]$FileName,    # e.g. 'shellcode.exe'
+        [Parameter(Mandatory)][string]$Destination  # full output path
+    )
+
+    $headers = @{ 'User-Agent' = 'PowerShell-LabSetup'; 'Accept' = 'application/vnd.github+json' }
+
+    Write-Log "Resolving $FileName in $Repo"
+    $meta   = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo" -Headers $headers -UseBasicParsing -TimeoutSec 60
+    $branch = $meta.default_branch
+
+    $treeUri = "https://api.github.com/repos/$Repo/git/trees/$branch" + '?recursive=1'
+    $tree    = Invoke-RestMethod -Uri $treeUri -Headers $headers -UseBasicParsing -TimeoutSec 60
+
+    $entry = $tree.tree |
+             Where-Object { $_.type -eq 'blob' -and (($_.path -split '/')[-1] -ieq $FileName) } |
+             Select-Object -First 1
+
+    if (-not $entry) { throw "'$FileName' not found in $Repo (default branch: $branch)." }
+
+    $raw = "https://raw.githubusercontent.com/$Repo/$branch/$($entry.path)"
+    Get-RemoteFile -Uri $raw -OutFile $Destination -Headers $headers | Out-Null
+    return $Destination
 }
 
 function Set-MachineEnvVar {
@@ -395,6 +432,34 @@ function Set-DemoDirectory {
     }
 }
 
+function Get-LabFiles {
+    if (-not (Test-Path $DemoPath)) {
+        New-Item -ItemType Directory -Path $DemoPath -Force | Out-Null
+        Write-Log "Created $DemoPath"
+    }
+
+    foreach ($name in $LabFiles) {
+        $dest = Join-Path $DemoPath $name
+
+        if ((Test-Path $dest) -and -not $Force) {
+            Write-Log "$name already present in $DemoPath"
+        }
+        else {
+            if (Test-Path $dest) { Remove-Item $dest -Force }
+            Get-GitHubRepoFile -Repo $LabRepo -FileName $name -Destination $dest | Out-Null
+        }
+
+        # Strip the Mark-of-the-Web (Zone.Identifier) so SmartScreen / zone checks
+        # don't block the file when you open it inside the lab. This is exactly why
+        # it belongs in an isolated VM, not on a working machine.
+        Unblock-File -Path $dest
+        Write-Log "Unblocked $dest"
+    }
+
+    Write-Log "Staged $($LabFiles.Count) file(s) in $DemoPath" 'OK'
+    Write-Log 'These are live analysis artifacts. Only open/run them inside an isolated, snapshotted VM with no bridged networking.' 'WARN'
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -413,6 +478,7 @@ try {
     Invoke-Step -Name 'WinDbg'           -Skip:$SkipWinDbg -Action { Install-WinDbg }
     Invoke-Step -Name 'Python + Speakeasy' -Skip:$SkipPython -Action { Install-Python }
     Invoke-Step -Name 'Demo directory'   -Action { Set-DemoDirectory }
+    Invoke-Step -Name 'Lab files'        -Skip:$SkipLabFiles -Action { Get-LabFiles }
 }
 finally {
     if (Test-Path $WorkDir) {

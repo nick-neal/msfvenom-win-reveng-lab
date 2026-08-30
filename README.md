@@ -32,7 +32,7 @@ You will need to open a powershell window as administrator and run the `lab-setu
 - Download and Install Python 3.10
     - Install speakeasy-emulator module
 - Create C:\demo directory and whitelist the directory in MSDefender
-- Download the following files from the  repo:
+- Download the following files from the repo:
     - listener.ps1  -> C:\demo
         - `Unblock-File -Path "C:\demo\listen.ps1"`
     - shellcode.exe -> C:\demo
