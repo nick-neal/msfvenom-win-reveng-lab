@@ -24,7 +24,14 @@ You will then be asked to **Select the product language** (I chose English (Unit
 This will display an additional button that says **Download Now**. Click this button and your download should begin.
 
 ### Run lab-setup.ps1 script
-You will need to open a powershell window as administrator and run the `lab-setup.ps1` script provided in this repo. The script will perform the following actions in your VM:
+
+You will need to open a powershell window as administrator (right-click powershell and select "Run as Administrator"). 
+
+Once the powershell window is open, you can run the script like so:
+```powershell
+iex ((New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/nick-neal/msfvenom-win-reveng-lab/refs/heads/main/lab-setup.ps1'))
+```
+The script will perform the following actions in your VM:
 
 - Download and Install OpenJDK
 - Download and Install Ghidra
