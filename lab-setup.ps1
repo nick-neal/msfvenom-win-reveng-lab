@@ -60,7 +60,7 @@ param(
 
     # Sample/tooling files to stage into the demo directory for analysis.
     [string]$LabRepo  = 'nick-neal/msfvenom-win-reveng-lab',
-    [string[]]$LabFiles = @('listener.ps1', 'shellcode.exe'),
+    [string[]]$LabFiles = @('listener.ps1', 'shellcode.exe', 'shellcode-annotated.exe.gzf', 'cheatsheet.pdf'),
 
     [switch]$SkipExecutionPolicy,
     [switch]$SkipJdk,
