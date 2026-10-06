@@ -11,7 +11,7 @@ VM Specs:
 - RAM: 4GB
 - DISK: 64GB
 
-### Setup Fresh Windows 11 Pro VM
+### 1. Setup Fresh Windows 11 Pro VM
 You will need a VM with a fresh install of **Windows 11 Pro** (no license necessary for install and use in lab env). You can either use a local hypervisor on the computer you plan on using in the lab (VMWare, Hyper-V, VirtualBox, etc), or a VM provided by a VDI provider (AWS, M365, etc).
 
 #### Download Intel/AMD x64 ISO
@@ -28,13 +28,13 @@ You will then be asked to **Select the product language** (I chose English (Unit
 
 This will display an additional button that says **Download Now**. Click this button and your download should begin.
 
-### Install Hypervisor tools
+### 2. Install Hypervisor tools
 Make sure to install the hypervisor tools into your VM so that the screen renders better, and you can take advantage of built-in tools.
 
-### Take a snapshot of your VM
+### 3. Take a snapshot of your VM
 It's good practice to take a snapshot of a clean VM setup, so that if the install script creates issues, you can start back from a good restore point instead of having to restart the whole build process.
 
-### Run lab-setup.ps1 script
+### 4. Run lab-setup.ps1 script
 
 You will need to open a powershell window as administrator (right-click powershell and select "Run as Administrator"). 
 
