@@ -12,13 +12,15 @@
       * Ghidra (latest GitHub release, GHIDRA_INSTALL_DIR + desktop shortcut)
       * WinDbg (winget, with the aka.ms App Installer package as fallback)
       * Python 3.10 (all users, PATH) plus the speakeasy-emulator package
+      * Sysinternals Suite (extracted to C:\Tools\Sysinternals, added to PATH,
+        EULA pre-accepted via registry so tools launch without prompting)
       * C:\demo working directory, added to the Microsoft Defender exclusion list
 
     Every step is idempotent: re-running skips anything already present.
     A transcript is written to $InstallRoot\logs.
 
 .PARAMETER InstallRoot
-    Base directory for JDK and Ghidra. Default C:\Tools.
+    Base directory for JDK, Ghidra, and Sysinternals. Default C:\Tools.
 
 .PARAMETER DemoPath
     Working directory to create and exclude from Defender. Default C:\demo.
@@ -33,6 +35,9 @@
 .PARAMETER ExecutionPolicyLevel
     Machine execution policy to set. Default Unrestricted. Appropriate for a
     dedicated lab VM; not recommended on a general-purpose machine.
+
+.PARAMETER SysinternalsPath
+    Where to extract Sysinternals. Default C:\Tools\Sysinternals.
 
 .PARAMETER Force
     Reinstall components even if they are already detected.
@@ -58,6 +63,8 @@ param(
     [ValidateSet('Restricted', 'AllSigned', 'RemoteSigned', 'Unrestricted', 'Bypass')]
     [string]$ExecutionPolicyLevel = 'Unrestricted',
 
+    [string]$SysinternalsPath = 'C:\Tools\Sysinternals',
+
     # Sample/tooling files to stage into the demo directory for analysis.
     [string]$LabRepo  = 'nick-neal/msfvenom-win-reveng-lab',
     [string[]]$LabFiles = @('listener.ps1', 'shellcode.exe', 'shellcode-annotated.exe.gzf', 'cheatsheet.pdf'),
@@ -67,6 +74,7 @@ param(
     [switch]$SkipGhidra,
     [switch]$SkipWinDbg,
     [switch]$SkipPython,
+    [switch]$SkipSysinternals,
     [switch]$SkipDefenderExclusion,
     [switch]$SkipLabFiles,
     [switch]$Force
@@ -452,6 +460,90 @@ function Install-Python {
     Write-Log "speakeasy import check: $check"
 }
 
+function Install-Sysinternals {
+    <#
+        Downloads the official Sysinternals Suite zip from download.sysinternals.com
+        (the canonical Microsoft-hosted URL), extracts it to $SysinternalsPath, adds
+        that directory to the machine PATH, and pre-accepts the Sysinternals EULA for
+        every tool via the registry so the one-time nag dialog never appears.
+
+        The EULA key pattern is:
+            HKCU:\Software\Sysinternals\<ToolName>\EulaAccepted = 1 (DWORD)
+        and also the suite-level key:
+            HKCU:\Software\Sysinternals\EulaAccepted = 1
+
+        Per-tool keys must be set for each executable because each tool checks its own
+        key on first launch. We read the exe names from the extracted directory so the
+        list stays current even if Microsoft adds tools in a future suite release.
+    #>
+
+    # Idempotency: skip if procmon.exe (a reliable suite sentinel) is present.
+    $sentinel = Join-Path $SysinternalsPath 'procmon.exe'
+    if ((Test-Path $sentinel) -and -not $Force) {
+        Write-Log "Sysinternals already present at $SysinternalsPath"
+    }
+    else {
+        if (Test-Path $SysinternalsPath) { Remove-Item $SysinternalsPath -Recurse -Force }
+
+        $zip = Get-RemoteFile `
+            -Uri     'https://download.sysinternals.com/files/SysinternalsSuite.zip' `
+            -OutFile (Join-Path $WorkDir 'SysinternalsSuite.zip')
+
+        Expand-ToDirectory -ZipPath $zip -Destination $SysinternalsPath
+    }
+
+    # Confirm the sentinel is now in place.
+    if (-not (Test-Path $sentinel)) {
+        throw "Extraction appeared to succeed but procmon.exe is missing from $SysinternalsPath"
+    }
+
+    Add-MachinePath -Directory $SysinternalsPath
+
+    # -------------------------------------------------------------------------
+    # Pre-accept the EULA for every tool in the suite.
+    #
+    # Each Sysinternals executable checks:
+    #   HKCU:\Software\Sysinternals\<ToolName>\EulaAccepted (DWORD 1)
+    # where <ToolName> is the exe base name with the extension stripped,
+    # e.g. "Process Monitor" for procmon.exe (the display name, not the file
+    # name) - EXCEPT that the registry key uses the file base name, not the
+    # display name. We set both the file-base-name key and the display name
+    # is irrelevant here; what matters is the base name of the executable.
+    # We also set the suite-level key for good measure.
+    # -------------------------------------------------------------------------
+    $eulaRoot = 'HKCU:\Software\Sysinternals'
+
+    # Suite-level key.
+    if (-not (Test-Path $eulaRoot)) { New-Item -Path $eulaRoot -Force | Out-Null }
+    Set-ItemProperty -Path $eulaRoot -Name 'EulaAccepted' -Value 1 -Type DWord
+    Write-Log "EULA pre-accepted at $eulaRoot"
+
+    # Per-tool keys - one for every .exe in the suite directory.
+    $exes   = Get-ChildItem -Path $SysinternalsPath -Filter '*.exe'
+    $count  = 0
+    foreach ($exe in $exes) {
+        $toolName = $exe.BaseName                          # e.g. 'procmon'
+        $keyPath  = "$eulaRoot\$toolName"
+        if (-not (Test-Path $keyPath)) { New-Item -Path $keyPath -Force | Out-Null }
+        Set-ItemProperty -Path $keyPath -Name 'EulaAccepted' -Value 1 -Type DWord
+        $count++
+    }
+    Write-Log "EULA pre-accepted for $count Sysinternals tools"
+
+    # Spot-check: confirm a few key tools are present.
+    $keyTools = @('procmon.exe', 'procexp.exe', 'autoruns.exe',
+                  'tcpview.exe', 'handle.exe', 'strings.exe', 'listdlls.exe')
+    $missing  = $keyTools | Where-Object { -not (Test-Path (Join-Path $SysinternalsPath $_)) }
+    if ($missing) {
+        Write-Log "Expected tools not found after extraction: $($missing -join ', ')" 'WARN'
+    }
+    else {
+        Write-Log "Spot-check passed: $($keyTools.Count) key tools verified"
+    }
+
+    Write-Log "Sysinternals installed to $SysinternalsPath"
+}
+
 function Set-DemoDirectory {
     if (-not (Test-Path $DemoPath)) {
         New-Item -ItemType Directory -Path $DemoPath -Force | Out-Null
@@ -533,12 +625,13 @@ Write-Log "InstallRoot: $InstallRoot   DemoPath: $DemoPath   Scratch: $WorkDir"
 
 try {
     Invoke-Step -Name 'Execution policy'   -Skip:$SkipExecutionPolicy -Action { Set-ScriptExecutionPolicy }
-    Invoke-Step -Name 'OpenJDK'            -Skip:$SkipJdk    -Action { Install-OpenJdk }
-    Invoke-Step -Name 'Ghidra'             -Skip:$SkipGhidra -Action { Install-Ghidra }
-    Invoke-Step -Name 'WinDbg'             -Skip:$SkipWinDbg -Action { Install-WinDbg }
-    Invoke-Step -Name 'Python + Speakeasy' -Skip:$SkipPython -Action { Install-Python }
-    Invoke-Step -Name 'Demo directory'     -Action { Set-DemoDirectory }
-    Invoke-Step -Name 'Lab files'          -Skip:$SkipLabFiles -Action { Get-LabFiles }
+    Invoke-Step -Name 'OpenJDK'            -Skip:$SkipJdk             -Action { Install-OpenJdk }
+    Invoke-Step -Name 'Ghidra'             -Skip:$SkipGhidra          -Action { Install-Ghidra }
+    Invoke-Step -Name 'WinDbg'             -Skip:$SkipWinDbg          -Action { Install-WinDbg }
+    Invoke-Step -Name 'Python + Speakeasy' -Skip:$SkipPython          -Action { Install-Python }
+    Invoke-Step -Name 'Sysinternals'       -Skip:$SkipSysinternals    -Action { Install-Sysinternals }
+    Invoke-Step -Name 'Demo directory'                                 -Action { Set-DemoDirectory }
+    Invoke-Step -Name 'Lab files'          -Skip:$SkipLabFiles        -Action { Get-LabFiles }
 }
 finally {
     if (Test-Path $WorkDir) {

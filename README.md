@@ -6,6 +6,11 @@ This repo is for setting up a Windows 11 VM for reverse engineer msfvenom's Wind
 > If you run into issues while using the [Setup Lab VM](#setup-lab-vm) instructions, DM drkstar46 in the dc303 discord channel.
 
 ## Setup Lab VM
+VM Specs:
+- CPU: 2x
+- RAM: 4GB
+- DISK: 64GB
+
 ### Setup Fresh Windows 11 Pro VM
 You will need a VM with a fresh install of **Windows 11 Pro** (no license necessary for install and use in lab env). You can either use a local hypervisor on the computer you plan on using in the lab (VMWare, Hyper-V, VirtualBox, etc), or a VM provided by a VDI provider (AWS, M365, etc).
 
@@ -23,6 +28,12 @@ You will then be asked to **Select the product language** (I chose English (Unit
 
 This will display an additional button that says **Download Now**. Click this button and your download should begin.
 
+### Install Hypervisor tools
+Make sure to install the hypervisor tools into your VM so that the screen renders better, and you can take advantage of built-in tools.
+
+### Take a snapshot of your VM
+It's good practice to take a snapshot of a clean VM setup, so that if the install script creates issues, you can start back from a good restore point instead of having to restart the whole build process.
+
 ### Run lab-setup.ps1 script
 
 You will need to open a powershell window as administrator (right-click powershell and select "Run as Administrator"). 
@@ -38,8 +49,11 @@ The script will perform the following actions in your VM:
 - Download and Install WinDbg
 - Download and Install Python 3.10
     - Install speakeasy-emulator module
+- Download and setup SysInternal tools
 - Create C:\demo directory and whitelist the directory in MSDefender
 - Set powershell execution policy to unrestricted
 - Download the following files from the repo:
-    - listener.ps1  -> C:\demo
-    - shellcode.exe -> C:\demo
+    - listener.ps1                -> C:\demo
+    - shellcode.exe               -> C:\demo
+    - shellcode-annotated.exe.gzf -> C:\demo
+    - cheatsheet.pdf              -> C:\demo
